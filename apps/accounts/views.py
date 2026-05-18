@@ -1,6 +1,6 @@
 from rest_framework import generics
 from apps.accounts.models import CustomUser as User
-from apps.accounts.serializers import RegistrationSerializer, EmailTokenObtainPairSerializer
+from apps.accounts.serializers import RegistrationSerializer, EmailTokenObtainPairSerializer, UserSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
 
 
@@ -12,3 +12,9 @@ class RegistrationView(generics.CreateAPIView):
 
 class EmailTokenObtainPairView(TokenObtainPairView):
     serializer_class = EmailTokenObtainPairSerializer
+    
+class MeView(generics.RetrieveUpdateAPIView):
+    serializer_class = UserSerializer
+    
+    def get_object(self):
+        return self.request.user

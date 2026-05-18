@@ -24,3 +24,10 @@ class RegistrationSerializer(ModelSerializer):
 
 class EmailTokenObtainPairSerializer(TokenObtainPairSerializer):
     username_field = User.EMAIL_FIELD
+
+
+class UserSerializer(ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'first_name', 'last_name', 'username', 'email', 'tenant', 'role']
+        read_only_fields = ['id', 'tenant', 'role']

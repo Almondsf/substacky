@@ -18,6 +18,20 @@ class PlanListCreateView(generics.ListCreateAPIView):
     
     def perform_create(self, serializer):
         serializer.save(tenant=self.request.user.tenant)
+
+
+
+class PlanDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = PlanSerializer
+    lookup_field = 'pk'
+    
+    def get_permissions(self):
+        if self.request.method in ['PUT', 'PATCH', 'DELETE']:
+            return [IsTenantAdmin()]
+        return [IsAuthenticated()]
+    
+    def get_queryset(self):
+        return Plan.objects.filter(tenant=self.request.user.tenant)
     
 class SubscriptionListCreateView(generics.ListCreateAPIView):
     permission_classes = [IsAuthenticated]
@@ -29,3 +43,12 @@ class SubscriptionListCreateView(generics.ListCreateAPIView):
     
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+
+class SubscriptionDetailView(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = SubscriptionSerializer
+    permission_classes = [IsAuthenticated]
+    lookup_field = 'pk'
+    
+    def get_queryset(self):
+        return Subscription.objects.filter(user=self.request.user)
