@@ -18,6 +18,7 @@ class Plan(models.Model):
 
 class Subscription(models.Model):
     class Status(models.TextChoices):
+        PENDING = 'pending', 'Pending'
         ACTIVE = 'active', 'Active'
         CANCELED = 'canceled', 'Canceled'
         PAST_DUE = 'past_due', 'Past Due'
@@ -25,5 +26,6 @@ class Subscription(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='subscriptions')
     plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name='subscriptions')
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.ACTIVE)
+    paystack_subscription_code = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)

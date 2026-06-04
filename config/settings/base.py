@@ -19,6 +19,7 @@ INSTALLED_APPS = [
     'apps.accounts',
     'apps.tenants',
     'apps.subscriptions',
+    'apps.webhooks',
 ]
 
 MIDDLEWARE = [
@@ -61,6 +62,8 @@ DATABASES = {
         'PORT': config('DB_PORT'),
     }
 }
+
+PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY')
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},

@@ -20,7 +20,6 @@ class PlanListCreateView(generics.ListCreateAPIView):
         serializer.save(tenant=self.request.user.tenant)
 
 
-
 class PlanDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = PlanSerializer
     lookup_field = 'pk'
