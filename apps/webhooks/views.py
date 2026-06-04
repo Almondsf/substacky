@@ -3,6 +3,7 @@ import hashlib
 import json
 import logging
 from django.conf import settings
+from django.db import transaction
 from django.views.decorators.csrf import csrf_exempt
 from django.utils.decorators import method_decorator
 from rest_framework.views import APIView
@@ -50,22 +51,22 @@ class PaystackWebhookView(APIView):
         if event_type not in VALID_EVENTS:
             return Response({'message': 'Ignored event'}, status=status.HTTP_200_OK)
 
-        # Safer idempotency key
         reference = payload.get('data', {}).get('reference')
         event_id = f"{event_type}:{reference}"
 
         if WebhookEvent.objects.filter(event_id=event_id).exists():
             return Response({'message': 'Event already processed'}, status=status.HTTP_200_OK)
 
-        WebhookEvent.objects.create(
-            event_id=event_id,
-            event_type=event_type,
-            payload=payload
-        )
-
         try:
-            PaystackWebhookService().handle_event(event_type, payload.get('data', {}))
+            with transaction.atomic():
+                WebhookEvent.objects.create(
+                    event_id=event_id,
+                    event_type=event_type,
+                    payload=payload
+                )
+                PaystackWebhookService().handle_event(event_type, payload.get('data', {}))
         except Exception as e:
             logger.error(f"Webhook processing failed: {str(e)}", exc_info=True)
+            return Response({'error': 'Processing failed'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({'message': 'Webhook processed'}, status=status.HTTP_200_OK)
