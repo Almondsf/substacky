@@ -64,6 +64,9 @@ DATABASES = {
 }
 
 PAYSTACK_SECRET_KEY = config('PAYSTACK_SECRET_KEY')
+PAYSTACK_BASE_URL = config('PAYSTACK_BASE_URL', default='https://api.paystack.co')
+# Where Paystack sends the customer after checkout (your frontend).
+PAYSTACK_CALLBACK_URL = config('PAYSTACK_CALLBACK_URL', default='')
 
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},

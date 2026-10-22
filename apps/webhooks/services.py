@@ -10,6 +10,7 @@ PAYSTACK_STATUS_MAP = {
     'non-renewing': Subscription.Status.ACTIVE,
     'attention': Subscription.Status.PAST_DUE,
     'completed': Subscription.Status.CANCELED,
+    'complete': Subscription.Status.CANCELED,
     'cancelled': Subscription.Status.CANCELED,
 }
 
@@ -19,7 +20,10 @@ class PaystackWebhookService:
         handlers = {
             'charge.success': self.handle_charge_success,
             'invoice.payment_failed': self.handle_payment_failed,
+            'subscription.create': self.handle_subscription_create,
             'subscription.updated': self.handle_subscription_updated,
+            'subscription.disable': self.handle_subscription_updated,
+            'subscription.not_renew': self.handle_subscription_updated,
         }
         handler = handlers.get(event_type)
         if handler:
@@ -28,11 +32,39 @@ class PaystackWebhookService:
             logger.info(f"Unhandled event type: {event_type}")
     
     def handle_charge_success(self, payload):
+        # First payment from checkout carries our reference; renewals carry the subscription code.
+        reference = payload.get('reference')
         subscription_code = payload.get('subscription_code')
+        if reference and Subscription.objects.filter(paystack_reference=reference).update(
+            status=Subscription.Status.ACTIVE
+        ):
+            return
         if subscription_code:
             Subscription.objects.filter(
                 paystack_subscription_code=subscription_code
             ).update(status=Subscription.Status.ACTIVE)
+
+    def handle_subscription_create(self, payload):
+        # Paystack creates the recurring subscription after the first charge;
+        # link its code to the newest checkout for that customer and plan.
+        subscription_code = payload.get('subscription_code')
+        email = (payload.get('customer') or {}).get('email')
+        plan_code = (payload.get('plan') or {}).get('plan_code')
+        if not (subscription_code and email and plan_code):
+            return
+        if Subscription.objects.filter(paystack_subscription_code=subscription_code).exists():
+            return
+        subscription = Subscription.objects.filter(
+            user__email=email,
+            plan__paystack_plan_code=plan_code,
+            paystack_subscription_code__isnull=True,
+        ).exclude(status=Subscription.Status.CANCELED).order_by('-created_at').first()
+        if subscription:
+            subscription.paystack_subscription_code = subscription_code
+            subscription.status = Subscription.Status.ACTIVE
+            subscription.save(update_fields=['paystack_subscription_code', 'status'])
+        else:
+            logger.warning(f"No subscription to link for {subscription_code} ({email}, {plan_code})")
     
     def handle_payment_failed(self, payload):
         subscription_code = payload.get('subscription_code')

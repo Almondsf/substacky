@@ -14,14 +14,17 @@ SECRET = 'sk_test_secret'
 
 
 @override_settings(PAYSTACK_SECRET_KEY=SECRET)
-class PaystackWebhookTests(APITestCase):
+class WebhookTestCase(APITestCase):
 
     def setUp(self):
         tenant = Tenant.objects.create(name='Acme', slug='acme')
         user = User.objects.create_user(username='m', email='m@acme.com', password='x', tenant=tenant)
-        plan = Plan.objects.create(tenant=tenant, name='Pro', price='5000.00')
+        self.user = user
+        self.plan = Plan.objects.create(
+            tenant=tenant, name='Pro', price='5000.00', paystack_plan_code='PLN_pro'
+        )
         self.subscription = Subscription.objects.create(
-            user=user, plan=plan, paystack_subscription_code='SUB_abc'
+            user=user, plan=self.plan, paystack_subscription_code='SUB_abc'
         )
 
     def post_event(self, payload, signature=None):
@@ -36,6 +39,9 @@ class PaystackWebhookTests(APITestCase):
     def assert_status(self, expected):
         self.subscription.refresh_from_db()
         self.assertEqual(self.subscription.status, expected)
+
+
+class PaystackWebhookTests(WebhookTestCase):
 
     def test_missing_signature_rejected(self):
         response = self.client.post(reverse('paystack-webhook'), {}, format='json')
@@ -97,3 +103,36 @@ class PaystackWebhookTests(APITestCase):
             'subscription_code': 'SUB_abc', 'status': 'weird'
         }})
         self.assert_status(Subscription.Status.PENDING)
+
+
+class CheckoutWebhookTests(WebhookTestCase):
+    """Webhooks that complete a checkout started via /checkout/."""
+
+    def setUp(self):
+        super().setUp()
+        self.subscription = Subscription.objects.create(
+            user=self.user, plan=self.plan, paystack_reference='sub_ref'
+        )
+
+    def test_charge_success_activates_by_reference(self):
+        self.post_event({'event': 'charge.success', 'data': {'reference': 'sub_ref'}})
+        self.assert_status(Subscription.Status.ACTIVE)
+
+    def test_subscription_create_links_code(self):
+        Subscription.objects.filter(paystack_subscription_code='SUB_abc').delete()
+        self.post_event({'event': 'subscription.create', 'data': {
+            'subscription_code': 'SUB_new',
+            'customer': {'email': 'm@acme.com'},
+            'plan': {'plan_code': 'PLN_pro'},
+        }})
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.paystack_subscription_code, 'SUB_new')
+        self.assertEqual(self.subscription.status, Subscription.Status.ACTIVE)
+
+    def test_subscription_disable_cancels(self):
+        self.subscription.paystack_subscription_code = 'SUB_new'
+        self.subscription.save()
+        self.post_event({'event': 'subscription.disable', 'data': {
+            'subscription_code': 'SUB_new', 'status': 'complete'
+        }})
+        self.assert_status(Subscription.Status.CANCELED)

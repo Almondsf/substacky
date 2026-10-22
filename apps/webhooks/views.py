@@ -17,7 +17,10 @@ logger = logging.getLogger(__name__)
 VALID_EVENTS = {
     'charge.success',
     'invoice.payment_failed',
-    'subscription.updated'
+    'subscription.create',
+    'subscription.updated',
+    'subscription.disable',
+    'subscription.not_renew',
 }
 
 @method_decorator(csrf_exempt, name='dispatch')

@@ -13,6 +13,7 @@ class Plan(models.Model):
     name = models.CharField(max_length=255)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     interval = models.CharField(max_length=20, choices=Interval.choices, default=Interval.MONTHLY)
+    paystack_plan_code = models.CharField(max_length=255, blank=True, null=True, unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
     
 
@@ -27,5 +28,6 @@ class Subscription(models.Model):
     user = models.ForeignKey('accounts.CustomUser', on_delete=models.CASCADE, related_name='subscriptions')
     plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name='subscriptions')
     paystack_subscription_code = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    paystack_reference = models.CharField(max_length=255, blank=True, null=True, unique=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
