@@ -3,6 +3,7 @@ from django.db import transaction
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from apps.subscriptions.access import active_subscriptions
 from apps.subscriptions.models import Plan, Subscription
 from apps.subscriptions.paystack import PaystackClient
 from apps.subscriptions.serializers import PlanSerializer, SubscriptionSerializer, CheckoutSerializer
@@ -90,3 +91,13 @@ class CheckoutView(APIView):
             'authorization_url': checkout['authorization_url'],
             'reference': reference,
         }, status=status.HTTP_201_CREATED)
+
+
+class AccessView(APIView):
+    """What the current user can access: lets frontends gate content."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        plan_ids = active_subscriptions(request.user).values_list('plan_id', flat=True).distinct()
+        plan_ids = [str(plan_id) for plan_id in plan_ids]
+        return Response({'has_access': bool(plan_ids), 'active_plans': plan_ids})

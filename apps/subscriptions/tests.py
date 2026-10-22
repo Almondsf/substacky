@@ -3,7 +3,8 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.response import Response
+from rest_framework.test import APIRequestFactory, APITestCase, force_authenticate
 from apps.accounts.models import CustomUser as User
 from apps.subscriptions.models import Plan, Subscription
 from apps.subscriptions.paystack import PaystackClient, PaystackError
@@ -169,3 +170,55 @@ class PaystackClientTests(APITestCase):
         urlopen.return_value = self.fake_response({'status': False, 'message': 'Invalid key'})
         with self.assertRaises(PaystackError):
             PaystackClient(secret_key='sk', base_url='https://api.test').create_plan('Gold', 1, 'monthly')
+
+
+class ContentGatingTests(SubscriptionTestCase):
+
+    def gated_view(self, required_plans=None):
+        from rest_framework.views import APIView
+        from core.permissions import HasActiveSubscription
+
+        class GatedView(APIView):
+            permission_classes = [HasActiveSubscription]
+
+            def get(self, request):
+                return Response({'ok': True})
+
+        GatedView.required_plans = required_plans
+        return GatedView.as_view()
+
+    def get_gated(self, user, required_plans=None):
+        request = APIRequestFactory().get('/gated/')
+        force_authenticate(request, user=user)
+        return self.gated_view(required_plans)(request)
+
+    def test_no_subscription_is_denied(self):
+        self.assertEqual(self.get_gated(self.member).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_pending_or_past_due_is_denied(self):
+        for sub_status in (Subscription.Status.PENDING, Subscription.Status.PAST_DUE):
+            Subscription.objects.create(user=self.member, plan=self.plan, status=sub_status)
+        self.assertEqual(self.get_gated(self.member).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_active_subscription_is_allowed(self):
+        Subscription.objects.create(user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE)
+        self.assertEqual(self.get_gated(self.member).status_code, status.HTTP_200_OK)
+
+    def test_required_plans_enforced(self):
+        premium = Plan.objects.create(tenant=self.tenant, name='Premium', price='9000.00')
+        Subscription.objects.create(user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE)
+        self.assertEqual(
+            self.get_gated(self.member, required_plans=[premium.id]).status_code,
+            status.HTTP_403_FORBIDDEN
+        )
+        self.assertEqual(
+            self.get_gated(self.member, required_plans=[self.plan.id, premium.id]).status_code,
+            status.HTTP_200_OK
+        )
+
+    def test_access_endpoint(self):
+        self.client.force_authenticate(self.member)
+        self.assertEqual(self.client.get(reverse('access')).data, {'has_access': False, 'active_plans': []})
+        Subscription.objects.create(user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE)
+        response = self.client.get(reverse('access'))
+        self.assertEqual(response.data, {'has_access': True, 'active_plans': [str(self.plan.id)]})
