@@ -1,13 +1,20 @@
 import uuid
+from datetime import timedelta
+from decimal import Decimal
+from django.db.models import Count, Q, Sum
+from django.utils import timezone
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from apps.subscriptions.access import active_subscriptions
-from apps.subscriptions.models import Plan, Subscription
+from apps.subscriptions.models import Payment, Plan, Subscription
 from apps.subscriptions.paystack import PaystackClient
-from apps.subscriptions.serializers import PlanSerializer, SubscriptionSerializer, CheckoutSerializer
+from apps.subscriptions.serializers import (
+    PlanSerializer, SubscriptionSerializer, CheckoutSerializer,
+    TenantSubscriptionSerializer, PaymentSerializer,
+)
 from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsTenantAdmin
 
@@ -126,3 +133,80 @@ class SubscriptionCancelView(APIView):
         subscription.status = Subscription.Status.CANCELED
         subscription.save(update_fields=['status'])
         return Response(SubscriptionSerializer(subscription).data)
+
+
+class PaymentListView(generics.ListAPIView):
+    permission_classes = [IsAuthenticated]
+    serializer_class = PaymentSerializer
+
+    def get_queryset(self):
+        return Payment.objects.filter(user=self.request.user)
+
+
+class TenantSubscriptionListView(generics.ListAPIView):
+    """All subscriptions in the admin's tenant; filter with ?status=active."""
+    permission_classes = [IsTenantAdmin]
+    serializer_class = TenantSubscriptionSerializer
+
+    def get_queryset(self):
+        queryset = Subscription.objects.filter(
+            plan__tenant=self.request.user.tenant
+        ).select_related('user').order_by('-created_at')
+        status_filter = self.request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        return queryset
+
+
+class TenantPaymentListView(generics.ListAPIView):
+    permission_classes = [IsTenantAdmin]
+    serializer_class = PaymentSerializer
+
+    def get_queryset(self):
+        return Payment.objects.filter(tenant=self.request.user.tenant)
+
+
+def monthly_price(plan):
+    if plan.interval == Plan.Interval.YEARLY:
+        return plan.price / 12
+    return plan.price
+
+
+class TenantMetricsView(APIView):
+    """Headline billing numbers for the admin's tenant."""
+    permission_classes = [IsTenantAdmin]
+
+    def get(self, request):
+        tenant = request.user.tenant
+        subscriptions = Subscription.objects.filter(plan__tenant=tenant)
+        active = subscriptions.filter(status=Subscription.Status.ACTIVE).select_related('plan')
+
+        by_status = {choice: 0 for choice in Subscription.Status.values}
+        for row in subscriptions.values('status').annotate(count=Count('id')):
+            by_status[row['status']] = row['count']
+
+        plans = {}
+        for subscription in active:
+            plan = subscription.plan
+            entry = plans.setdefault(plan.id, {
+                'plan': str(plan.id), 'name': plan.name, 'active_subscriptions': 0, 'mrr': Decimal('0'),
+            })
+            entry['active_subscriptions'] += 1
+            entry['mrr'] += monthly_price(plan)
+
+        since = timezone.now() - timedelta(days=30)
+        revenue = Payment.objects.filter(tenant=tenant).filter(
+            Q(paid_at__gte=since) | Q(paid_at__isnull=True, created_at__gte=since)
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0')
+
+        mrr = sum((entry['mrr'] for entry in plans.values()), Decimal('0'))
+        for entry in plans.values():
+            entry['mrr'] = str(entry['mrr'].quantize(Decimal('0.01')))
+
+        return Response({
+            'active_subscribers': active.values('user').distinct().count(),
+            'subscriptions_by_status': by_status,
+            'mrr': str(mrr.quantize(Decimal('0.01'))),
+            'revenue_last_30_days': str(revenue.quantize(Decimal('0.01'))),
+            'plans': list(plans.values()),
+        })

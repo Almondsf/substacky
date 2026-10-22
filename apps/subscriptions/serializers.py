@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from apps.subscriptions.models import Plan, Subscription
+from apps.subscriptions.models import Payment, Plan, Subscription
 
 class PlanSerializer(serializers.ModelSerializer):
     class Meta:
@@ -28,3 +28,18 @@ class CheckoutSerializer(serializers.Serializer):
         ).exists():
             raise serializers.ValidationError('You already have an active subscription to this plan.')
         return plan
+
+
+class TenantSubscriptionSerializer(SubscriptionSerializer):
+    user_email = serializers.EmailField(source='user.email', read_only=True)
+
+    class Meta(SubscriptionSerializer.Meta):
+        fields = SubscriptionSerializer.Meta.fields + ['user_email']
+        read_only_fields = fields
+
+
+class PaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Payment
+        fields = ['id', 'subscription', 'reference', 'amount', 'currency', 'paid_at', 'created_at']
+        read_only_fields = fields
