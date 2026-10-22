@@ -51,8 +51,11 @@ class PaystackWebhookView(APIView):
         if event_type not in VALID_EVENTS:
             return Response({'message': 'Ignored event'}, status=status.HTTP_200_OK)
 
+        # Not every event carries a reference (e.g. subscription.updated), so fall
+        # back to the body hash; Paystack retries resend the identical body.
         reference = payload.get('data', {}).get('reference')
-        event_id = f"{event_type}:{reference}"
+        dedupe_key = reference or hashlib.sha256(raw_body).hexdigest()
+        event_id = f"{event_type}:{dedupe_key}"
 
         if WebhookEvent.objects.filter(event_id=event_id).exists():
             return Response({'message': 'Event already processed'}, status=status.HTTP_200_OK)
