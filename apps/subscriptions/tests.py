@@ -1,12 +1,14 @@
 import json
+from datetime import timedelta
 from decimal import Decimal
+from django.utils import timezone
 from unittest.mock import MagicMock, patch
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.test import APIRequestFactory, APITestCase, force_authenticate
 from apps.accounts.models import CustomUser as User
-from apps.subscriptions.models import Plan, Subscription
+from apps.subscriptions.models import Payment, Plan, Subscription
 from apps.subscriptions.paystack import PaystackClient, PaystackError
 from apps.tenants.models import Tenant
 
@@ -222,3 +224,107 @@ class ContentGatingTests(SubscriptionTestCase):
         Subscription.objects.create(user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE)
         response = self.client.get(reverse('access'))
         self.assertEqual(response.data, {'has_access': True, 'active_plans': [str(self.plan.id)]})
+
+
+@patch('apps.subscriptions.views.PaystackClient')
+class CancelTests(SubscriptionTestCase):
+
+    def cancel(self, sub, user=None):
+        self.client.force_authenticate(user or self.member)
+        return self.client.post(reverse('subscription-cancel', args=[sub.id]))
+
+    def test_cancel_recurring_disables_on_paystack(self, client_cls):
+        sub = Subscription.objects.create(
+            user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE,
+            paystack_subscription_code='SUB_1', paystack_email_token='tok'
+        )
+        response = self.cancel(sub)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], Subscription.Status.CANCELED)
+        client_cls.return_value.disable_subscription.assert_called_once_with('SUB_1', 'tok')
+
+    def test_cancel_pending_skips_paystack(self, client_cls):
+        sub = Subscription.objects.create(user=self.member, plan=self.plan)
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_200_OK)
+        client_cls.return_value.disable_subscription.assert_not_called()
+
+    def test_paystack_failure_keeps_subscription_active(self, client_cls):
+        client_cls.return_value.disable_subscription.side_effect = PaystackError()
+        sub = Subscription.objects.create(
+            user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE,
+            paystack_subscription_code='SUB_1', paystack_email_token='tok'
+        )
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_502_BAD_GATEWAY)
+        sub.refresh_from_db()
+        self.assertEqual(sub.status, Subscription.Status.ACTIVE)
+
+    def test_missing_email_token_conflicts(self, client_cls):
+        sub = Subscription.objects.create(
+            user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE,
+            paystack_subscription_code='SUB_1'
+        )
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_409_CONFLICT)
+
+    def test_already_canceled(self, client_cls):
+        sub = Subscription.objects.create(user=self.member, plan=self.plan, status=Subscription.Status.CANCELED)
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_cancel_someone_elses(self, client_cls):
+        sub = Subscription.objects.create(user=self.admin, plan=self.plan, status=Subscription.Status.ACTIVE)
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_404_NOT_FOUND)
+
+
+class TenantAdminTests(SubscriptionTestCase):
+
+    def setUp(self):
+        super().setUp()
+        self.yearly = Plan.objects.create(
+            tenant=self.tenant, name='Annual', price='12000.00', interval=Plan.Interval.YEARLY
+        )
+        self.active = Subscription.objects.create(user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE)
+        Subscription.objects.create(user=self.member, plan=self.yearly, status=Subscription.Status.ACTIVE)
+        Subscription.objects.create(user=self.admin, plan=self.plan, status=Subscription.Status.PAST_DUE)
+        outsider = User.objects.create_user(username='o', email='o@other.com', password='x', tenant=self.other_tenant)
+        Subscription.objects.create(user=outsider, plan=self.foreign_plan, status=Subscription.Status.ACTIVE)
+        Payment.objects.create(
+            tenant=self.tenant, user=self.member, subscription=self.active, reference='p1', amount='5000.00',
+            paid_at=timezone.now() - timedelta(days=3)
+        )
+        Payment.objects.create(
+            tenant=self.tenant, user=self.member, subscription=self.active, reference='p0', amount='5000.00',
+            paid_at=timezone.now() - timedelta(days=40)
+        )
+        Payment.objects.create(tenant=self.other_tenant, reference='px', amount='100.00')
+
+    def test_member_cannot_view_tenant_endpoints(self):
+        self.client.force_authenticate(self.member)
+        for name in ('tenant-subscription-list', 'tenant-payment-list', 'tenant-metrics'):
+            self.assertEqual(self.client.get(reverse(name)).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_tenant_subscriptions_scoped_and_filterable(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.get(reverse('tenant-subscription-list'))
+        self.assertEqual(len(response.data), 3)
+        response = self.client.get(reverse('tenant-subscription-list'), {'status': 'past_due'})
+        self.assertEqual([s['user_email'] for s in response.data], ['admin@acme.com'])
+
+    def test_tenant_payments_scoped(self):
+        self.client.force_authenticate(self.admin)
+        response = self.client.get(reverse('tenant-payment-list'))
+        self.assertEqual({p['reference'] for p in response.data}, {'p0', 'p1'})
+
+    def test_metrics(self):
+        self.client.force_authenticate(self.admin)
+        data = self.client.get(reverse('tenant-metrics')).data
+        self.assertEqual(data['active_subscribers'], 1)
+        self.assertEqual(data['subscriptions_by_status']['active'], 2)
+        self.assertEqual(data['subscriptions_by_status']['past_due'], 1)
+        self.assertEqual(data['mrr'], '6000.00')  # 5000 monthly + 12000/12
+        self.assertEqual(data['revenue_last_30_days'], '5000.00')
+        self.assertEqual(len(data['plans']), 2)
+
+    def test_user_sees_only_own_payments(self):
+        self.client.force_authenticate(self.admin)
+        self.assertEqual(self.client.get(reverse('payment-list')).data, [])
+        self.client.force_authenticate(self.member)
+        self.assertEqual(len(self.client.get(reverse('payment-list')).data), 2)

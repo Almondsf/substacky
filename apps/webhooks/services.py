@@ -1,4 +1,6 @@
-from apps.subscriptions.models import Subscription
+from decimal import Decimal
+from django.utils.dateparse import parse_datetime
+from apps.subscriptions.models import Payment, Subscription
 import logging
 
 logger = logging.getLogger(__name__)
@@ -31,18 +33,47 @@ class PaystackWebhookService:
         else:
             logger.info(f"Unhandled event type: {event_type}")
     
-    def handle_charge_success(self, payload):
-        # First payment from checkout carries our reference; renewals carry the subscription code.
+    def find_subscription(self, payload):
+        # First payment from checkout carries our reference; renewals carry the
+        # subscription code, or at least the customer and plan.
         reference = payload.get('reference')
         subscription_code = payload.get('subscription_code')
-        if reference and Subscription.objects.filter(paystack_reference=reference).update(
-            status=Subscription.Status.ACTIVE
-        ):
-            return
+        email = (payload.get('customer') or {}).get('email')
+        plan_code = (payload.get('plan') or {}).get('plan_code')
+
+        if reference:
+            subscription = Subscription.objects.filter(paystack_reference=reference).first()
+            if subscription:
+                return subscription
         if subscription_code:
-            Subscription.objects.filter(
-                paystack_subscription_code=subscription_code
-            ).update(status=Subscription.Status.ACTIVE)
+            subscription = Subscription.objects.filter(paystack_subscription_code=subscription_code).first()
+            if subscription:
+                return subscription
+        if email and plan_code:
+            return Subscription.objects.filter(
+                user__email=email, plan__paystack_plan_code=plan_code
+            ).exclude(status=Subscription.Status.CANCELED).order_by('-created_at').first()
+        return None
+
+    def handle_charge_success(self, payload):
+        subscription = self.find_subscription(payload)
+        if not subscription:
+            logger.warning(f"charge.success with no matching subscription: {payload.get('reference')}")
+            return
+
+        subscription.status = Subscription.Status.ACTIVE
+        subscription.save(update_fields=['status'])
+
+        reference = payload.get('reference')
+        if reference:
+            Payment.objects.get_or_create(reference=reference, defaults={
+                'tenant_id': subscription.plan.tenant_id,
+                'user_id': subscription.user_id,
+                'subscription': subscription,
+                'amount': Decimal(payload.get('amount') or 0) / 100,
+                'currency': payload.get('currency') or 'NGN',
+                'paid_at': parse_datetime(payload.get('paid_at') or payload.get('paidAt') or ''),
+            })
 
     def handle_subscription_create(self, payload):
         # Paystack creates the recurring subscription after the first charge;
@@ -61,8 +92,9 @@ class PaystackWebhookService:
         ).exclude(status=Subscription.Status.CANCELED).order_by('-created_at').first()
         if subscription:
             subscription.paystack_subscription_code = subscription_code
+            subscription.paystack_email_token = payload.get('email_token')
             subscription.status = Subscription.Status.ACTIVE
-            subscription.save(update_fields=['paystack_subscription_code', 'status'])
+            subscription.save(update_fields=['paystack_subscription_code', 'paystack_email_token', 'status'])
         else:
             logger.warning(f"No subscription to link for {subscription_code} ({email}, {plan_code})")
     

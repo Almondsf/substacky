@@ -1,12 +1,13 @@
 import hashlib
 import hmac
 import json
+from decimal import Decimal
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from apps.accounts.models import CustomUser as User
-from apps.subscriptions.models import Plan, Subscription
+from apps.subscriptions.models import Payment, Plan, Subscription
 from apps.tenants.models import Tenant
 from apps.webhooks.models import WebhookEvent
 
@@ -122,11 +123,13 @@ class CheckoutWebhookTests(WebhookTestCase):
         Subscription.objects.filter(paystack_subscription_code='SUB_abc').delete()
         self.post_event({'event': 'subscription.create', 'data': {
             'subscription_code': 'SUB_new',
+            'email_token': 'tok_new',
             'customer': {'email': 'm@acme.com'},
             'plan': {'plan_code': 'PLN_pro'},
         }})
         self.subscription.refresh_from_db()
         self.assertEqual(self.subscription.paystack_subscription_code, 'SUB_new')
+        self.assertEqual(self.subscription.paystack_email_token, 'tok_new')
         self.assertEqual(self.subscription.status, Subscription.Status.ACTIVE)
 
     def test_subscription_disable_cancels(self):
@@ -136,3 +139,32 @@ class CheckoutWebhookTests(WebhookTestCase):
             'subscription_code': 'SUB_new', 'status': 'complete'
         }})
         self.assert_status(Subscription.Status.CANCELED)
+
+
+class PaymentRecordingTests(WebhookTestCase):
+
+    def test_charge_success_records_payment_once(self):
+        payload = {'event': 'charge.success', 'data': {
+            'reference': 'ref_pay', 'subscription_code': 'SUB_abc', 'amount': 500000,
+            'currency': 'NGN', 'paid_at': '2026-10-01T10:00:00.000Z',
+        }}
+        self.post_event(payload)
+        self.post_event(payload)
+        payment = Payment.objects.get()
+        self.assertEqual(payment.amount, Decimal('5000.00'))
+        self.assertEqual(payment.subscription, self.subscription)
+        self.assertEqual(payment.user, self.user)
+        self.assertEqual(payment.tenant, self.plan.tenant)
+        self.assertIsNotNone(payment.paid_at)
+
+    def test_renewal_matched_by_customer_and_plan(self):
+        self.post_event({'event': 'charge.success', 'data': {
+            'reference': 'renewal_1', 'amount': 500000,
+            'customer': {'email': 'm@acme.com'}, 'plan': {'plan_code': 'PLN_pro'},
+        }})
+        self.assertEqual(Payment.objects.get().subscription, self.subscription)
+        self.assert_status(Subscription.Status.ACTIVE)
+
+    def test_unmatched_charge_records_nothing(self):
+        self.post_event({'event': 'charge.success', 'data': {'reference': 'stray', 'amount': 100}})
+        self.assertFalse(Payment.objects.exists())
