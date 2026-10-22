@@ -1,6 +1,12 @@
-from rest_framework import generics
+import uuid
+from django.db import transaction
+from rest_framework import generics, status
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from apps.subscriptions.access import active_subscriptions
 from apps.subscriptions.models import Plan, Subscription
-from apps.subscriptions.serializers import PlanSerializer, SubscriptionSerializer
+from apps.subscriptions.paystack import PaystackClient
+from apps.subscriptions.serializers import PlanSerializer, SubscriptionSerializer, CheckoutSerializer
 from rest_framework.permissions import IsAuthenticated
 from core.permissions import IsTenantAdmin
 
@@ -17,7 +23,13 @@ class PlanListCreateView(generics.ListCreateAPIView):
         return Plan.objects.filter(tenant=tenant)
     
     def perform_create(self, serializer):
-        serializer.save(tenant=self.request.user.tenant)
+        data = serializer.validated_data
+        plan_code = PaystackClient().create_plan(
+            name=data['name'],
+            amount=data['price'],
+            interval=data.get('interval', Plan.Interval.MONTHLY)
+        )
+        serializer.save(tenant=self.request.user.tenant, paystack_plan_code=plan_code)
 
 
 class PlanDetailView(generics.RetrieveUpdateDestroyAPIView):
@@ -32,22 +44,60 @@ class PlanDetailView(generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         return Plan.objects.filter(tenant=self.request.user.tenant)
     
-class SubscriptionListCreateView(generics.ListCreateAPIView):
+class SubscriptionListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = SubscriptionSerializer
     
     def get_queryset(self):
         user = self.request.user
         return Subscription.objects.filter(user=user)
-    
-    def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
 
 
-class SubscriptionDetailView(generics.RetrieveUpdateDestroyAPIView):
+class SubscriptionDetailView(generics.RetrieveAPIView):
     serializer_class = SubscriptionSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = 'pk'
     
     def get_queryset(self):
         return Subscription.objects.filter(user=self.request.user)
+
+
+class CheckoutView(APIView):
+    """Start a subscription: creates a pending Subscription and a Paystack checkout."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = CheckoutSerializer
+
+    def post(self, request):
+        serializer = CheckoutSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        plan = serializer.validated_data['plan']
+        reference = f"sub_{uuid.uuid4().hex}"
+
+        # If Paystack fails, the pending subscription is rolled back.
+        with transaction.atomic():
+            subscription = Subscription.objects.create(
+                user=request.user, plan=plan, paystack_reference=reference
+            )
+            checkout = PaystackClient().initialize_transaction(
+                email=request.user.email,
+                amount=plan.price,
+                reference=reference,
+                plan_code=plan.paystack_plan_code,
+                metadata={'subscription_id': str(subscription.id)}
+            )
+
+        return Response({
+            'subscription': SubscriptionSerializer(subscription).data,
+            'authorization_url': checkout['authorization_url'],
+            'reference': reference,
+        }, status=status.HTTP_201_CREATED)
+
+
+class AccessView(APIView):
+    """What the current user can access: lets frontends gate content."""
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        plan_ids = active_subscriptions(request.user).values_list('plan_id', flat=True).distinct()
+        plan_ids = [str(plan_id) for plan_id in plan_ids]
+        return Response({'has_access': bool(plan_ids), 'active_plans': plan_ids})
