@@ -29,5 +29,7 @@ class Subscription(models.Model):
     plan = models.ForeignKey(Plan, on_delete=models.CASCADE, related_name='subscriptions')
     paystack_subscription_code = models.CharField(max_length=255, blank=True, null=True, unique=True)
     paystack_reference = models.CharField(max_length=255, blank=True, null=True, unique=True)
+    # Paystack requires this token (from subscription.create) to disable a subscription.
+    paystack_email_token = models.CharField(max_length=255, blank=True, null=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)

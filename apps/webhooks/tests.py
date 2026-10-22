@@ -122,11 +122,13 @@ class CheckoutWebhookTests(WebhookTestCase):
         Subscription.objects.filter(paystack_subscription_code='SUB_abc').delete()
         self.post_event({'event': 'subscription.create', 'data': {
             'subscription_code': 'SUB_new',
+            'email_token': 'tok_new',
             'customer': {'email': 'm@acme.com'},
             'plan': {'plan_code': 'PLN_pro'},
         }})
         self.subscription.refresh_from_db()
         self.assertEqual(self.subscription.paystack_subscription_code, 'SUB_new')
+        self.assertEqual(self.subscription.paystack_email_token, 'tok_new')
         self.assertEqual(self.subscription.status, Subscription.Status.ACTIVE)
 
     def test_subscription_disable_cancels(self):

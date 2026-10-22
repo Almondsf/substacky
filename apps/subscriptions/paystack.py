@@ -74,3 +74,6 @@ class PaystackClient:
         if settings.PAYSTACK_CALLBACK_URL:
             payload['callback_url'] = settings.PAYSTACK_CALLBACK_URL
         return self._post('/transaction/initialize', payload)
+
+    def disable_subscription(self, code, email_token):
+        return self._post('/subscription/disable', {'code': code, 'token': email_token})

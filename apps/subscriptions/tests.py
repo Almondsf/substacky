@@ -222,3 +222,51 @@ class ContentGatingTests(SubscriptionTestCase):
         Subscription.objects.create(user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE)
         response = self.client.get(reverse('access'))
         self.assertEqual(response.data, {'has_access': True, 'active_plans': [str(self.plan.id)]})
+
+
+@patch('apps.subscriptions.views.PaystackClient')
+class CancelTests(SubscriptionTestCase):
+
+    def cancel(self, sub, user=None):
+        self.client.force_authenticate(user or self.member)
+        return self.client.post(reverse('subscription-cancel', args=[sub.id]))
+
+    def test_cancel_recurring_disables_on_paystack(self, client_cls):
+        sub = Subscription.objects.create(
+            user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE,
+            paystack_subscription_code='SUB_1', paystack_email_token='tok'
+        )
+        response = self.cancel(sub)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['status'], Subscription.Status.CANCELED)
+        client_cls.return_value.disable_subscription.assert_called_once_with('SUB_1', 'tok')
+
+    def test_cancel_pending_skips_paystack(self, client_cls):
+        sub = Subscription.objects.create(user=self.member, plan=self.plan)
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_200_OK)
+        client_cls.return_value.disable_subscription.assert_not_called()
+
+    def test_paystack_failure_keeps_subscription_active(self, client_cls):
+        client_cls.return_value.disable_subscription.side_effect = PaystackError()
+        sub = Subscription.objects.create(
+            user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE,
+            paystack_subscription_code='SUB_1', paystack_email_token='tok'
+        )
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_502_BAD_GATEWAY)
+        sub.refresh_from_db()
+        self.assertEqual(sub.status, Subscription.Status.ACTIVE)
+
+    def test_missing_email_token_conflicts(self, client_cls):
+        sub = Subscription.objects.create(
+            user=self.member, plan=self.plan, status=Subscription.Status.ACTIVE,
+            paystack_subscription_code='SUB_1'
+        )
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_409_CONFLICT)
+
+    def test_already_canceled(self, client_cls):
+        sub = Subscription.objects.create(user=self.member, plan=self.plan, status=Subscription.Status.CANCELED)
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_cannot_cancel_someone_elses(self, client_cls):
+        sub = Subscription.objects.create(user=self.admin, plan=self.plan, status=Subscription.Status.ACTIVE)
+        self.assertEqual(self.cancel(sub).status_code, status.HTTP_404_NOT_FOUND)

@@ -61,8 +61,9 @@ class PaystackWebhookService:
         ).exclude(status=Subscription.Status.CANCELED).order_by('-created_at').first()
         if subscription:
             subscription.paystack_subscription_code = subscription_code
+            subscription.paystack_email_token = payload.get('email_token')
             subscription.status = Subscription.Status.ACTIVE
-            subscription.save(update_fields=['paystack_subscription_code', 'status'])
+            subscription.save(update_fields=['paystack_subscription_code', 'paystack_email_token', 'status'])
         else:
             logger.warning(f"No subscription to link for {subscription_code} ({email}, {plan_code})")
     

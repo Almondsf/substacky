@@ -1,5 +1,6 @@
 import uuid
 from django.db import transaction
+from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -101,3 +102,27 @@ class AccessView(APIView):
         plan_ids = active_subscriptions(request.user).values_list('plan_id', flat=True).distinct()
         plan_ids = [str(plan_id) for plan_id in plan_ids]
         return Response({'has_access': bool(plan_ids), 'active_plans': plan_ids})
+
+
+class SubscriptionCancelView(APIView):
+    """Cancel a subscription; recurring ones are also disabled on Paystack."""
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        subscription = get_object_or_404(Subscription, pk=pk, user=request.user)
+        if subscription.status == Subscription.Status.CANCELED:
+            return Response({'detail': 'Subscription is already canceled.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if subscription.paystack_subscription_code:
+            if not subscription.paystack_email_token:
+                return Response(
+                    {'detail': 'Subscription cannot be canceled yet; try again shortly.'},
+                    status=status.HTTP_409_CONFLICT
+                )
+            PaystackClient().disable_subscription(
+                subscription.paystack_subscription_code, subscription.paystack_email_token
+            )
+
+        subscription.status = Subscription.Status.CANCELED
+        subscription.save(update_fields=['status'])
+        return Response(SubscriptionSerializer(subscription).data)
