@@ -1,3 +1,5 @@
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema
 from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
@@ -16,6 +18,7 @@ class CurrentTenantView(APIView):
     """Public info for the request's tenant (X-Tenant header or subdomain), e.g. for a pricing page."""
     permission_classes = [AllowAny]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         tenant = request.tenant
         if tenant is None:

@@ -5,7 +5,9 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from django.db import transaction
 from django.shortcuts import get_object_or_404
-from rest_framework import generics, status
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import generics, serializers, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from apps.subscriptions.access import active_subscriptions
@@ -101,6 +103,10 @@ class AccessView(APIView):
     """What the current user can access: lets frontends gate content."""
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(responses=inline_serializer('Access', {
+        'has_access': serializers.BooleanField(),
+        'active_plans': serializers.ListField(child=serializers.UUIDField()),
+    }))
     def get(self, request):
         plan_ids = active_subscriptions(request.user).values_list('plan_id', flat=True).distinct()
         plan_ids = [str(plan_id) for plan_id in plan_ids]
@@ -111,6 +117,7 @@ class SubscriptionCancelView(APIView):
     """Cancel a subscription; recurring ones are also disabled on Paystack."""
     permission_classes = [IsAuthenticated]
 
+    @extend_schema(request=None, responses=SubscriptionSerializer)
     def post(self, request, pk):
         subscription = get_object_or_404(Subscription, pk=pk, user=request.user)
         if subscription.status == Subscription.Status.CANCELED:
@@ -169,6 +176,7 @@ class TenantMetricsView(APIView):
     """Headline billing numbers for the admin's tenant."""
     permission_classes = [IsTenantAdmin]
 
+    @extend_schema(responses=OpenApiTypes.OBJECT)
     def get(self, request):
         tenant = request.user.tenant
         subscriptions = Subscription.objects.filter(plan__tenant=tenant)

@@ -1,3 +1,4 @@
+from drf_spectacular.contrib.rest_framework_simplejwt import SimpleJWTScheme
 from rest_framework.exceptions import PermissionDenied
 from rest_framework_simplejwt.authentication import JWTAuthentication
 
@@ -14,3 +15,8 @@ class TenantJWTAuthentication(JWTAuthentication):
         if tenant is not None and user.tenant_id != tenant.id and not user.is_superuser:
             raise PermissionDenied('You do not belong to this tenant.')
         return user, token
+
+
+class TenantJWTScheme(SimpleJWTScheme):
+    """Documents TenantJWTAuthentication as bearer JWT in the OpenAPI schema."""
+    target_class = 'core.authentication.TenantJWTAuthentication'
