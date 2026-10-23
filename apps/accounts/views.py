@@ -50,6 +50,7 @@ class InviteListCreateView(TenantScopedMixin, generics.ListCreateAPIView):
 
 class InviteRevokeView(TenantScopedMixin, generics.DestroyAPIView):
     permission_classes = [IsTenantAdmin]
+    serializer_class = InviteSerializer
     queryset = Invite.objects.filter(accepted_at__isnull=True)
 
 

@@ -42,4 +42,23 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - run: python manage.py makemigrations --check --dry-run
+      - run: python manage.py spectacular --file /dev/null --fail-on-warn
       - run: python manage.py test
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start stack
+        run: |
+          cp .env.example .env
+          docker compose up -d --build --wait
+      - name: Smoke test
+        run: |
+          curl --fail --silent --show-error http://localhost:8000/api/schema/ > /dev/null
+          curl --fail --silent --show-error http://localhost:8000/static/admin/css/base.css > /dev/null
+          code=$(curl --silent --output /dev/null --write-out '%{http_code}' -H 'X-Tenant: missing' http://localhost:8000/api/tenants/current/)
+          test "$code" = "404"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs
