@@ -1,6 +1,9 @@
 from decimal import Decimal
+from django.conf import settings
+from django.db import transaction
 from django.utils.dateparse import parse_datetime
 from apps.subscriptions.models import Payment, Subscription
+from apps.subscriptions.notifications import send_payment_failed_email
 import logging
 
 logger = logging.getLogger(__name__)
@@ -61,8 +64,7 @@ class PaystackWebhookService:
             logger.warning(f"charge.success with no matching subscription: {payload.get('reference')}")
             return
 
-        subscription.status = Subscription.Status.ACTIVE
-        subscription.save(update_fields=['status'])
+        subscription.set_status(Subscription.Status.ACTIVE)
 
         reference = payload.get('reference')
         if reference:
@@ -98,12 +100,23 @@ class PaystackWebhookService:
         else:
             logger.warning(f"No subscription to link for {subscription_code} ({email}, {plan_code})")
     
+    def transition(self, subscription, status):
+        if subscription.set_status(status) and status == Subscription.Status.PAST_DUE:
+            # Email only once the webhook's transaction has committed.
+            transaction.on_commit(
+                lambda: send_payment_failed_email(subscription, settings.DUNNING_GRACE_DAYS)
+            )
+
     def handle_payment_failed(self, payload):
-        subscription_code = payload.get('subscription_code')
-        if subscription_code:
-            Subscription.objects.filter(
-                paystack_subscription_code=subscription_code
-            ).update(status=Subscription.Status.PAST_DUE)
+        # invoice.payment_failed nests the subscription inside the invoice.
+        subscription_code = (
+            payload.get('subscription_code')
+            or (payload.get('subscription') or {}).get('subscription_code')
+        )
+        if not subscription_code:
+            return
+        for subscription in Subscription.objects.filter(paystack_subscription_code=subscription_code):
+            self.transition(subscription, Subscription.Status.PAST_DUE)
     
     def handle_subscription_updated(self, payload):
         subscription_code = payload.get('subscription_code')
@@ -112,6 +125,5 @@ class PaystackWebhookService:
         if paystack_status and not status:
             logger.warning(f"Unknown Paystack subscription status: {paystack_status}")
         if subscription_code and status:
-            Subscription.objects.filter(
-                paystack_subscription_code=subscription_code
-            ).update(status=status)
+            for subscription in Subscription.objects.filter(paystack_subscription_code=subscription_code):
+                self.transition(subscription, status)

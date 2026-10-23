@@ -32,15 +32,15 @@ class PaystackClient:
         self.secret_key = secret_key or settings.PAYSTACK_SECRET_KEY
         self.base_url = base_url or settings.PAYSTACK_BASE_URL
 
-    def _post(self, path, payload):
+    def _request(self, method, path, payload=None):
         request = urllib.request.Request(
             f"{self.base_url}{path}",
-            data=json.dumps(payload).encode('utf-8'),
+            data=json.dumps(payload).encode('utf-8') if payload is not None else None,
             headers={
                 'Authorization': f"Bearer {self.secret_key}",
                 'Content-Type': 'application/json',
             },
-            method='POST',
+            method=method,
         )
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
@@ -53,6 +53,9 @@ class PaystackClient:
             logger.error(f"Paystack rejected {path}: {body.get('message')}")
             raise PaystackError(body.get('message') or None)
         return body['data']
+
+    def _post(self, path, payload):
+        return self._request('POST', path, payload)
 
     def create_plan(self, name, amount, interval):
         data = self._post('/plan', {
@@ -77,3 +80,7 @@ class PaystackClient:
 
     def disable_subscription(self, code, email_token):
         return self._post('/subscription/disable', {'code': code, 'token': email_token})
+
+    def get_manage_link(self, code):
+        """A Paystack-hosted page where the customer can update their card."""
+        return self._request('GET', f"/subscription/{code}/manage/link")['link']

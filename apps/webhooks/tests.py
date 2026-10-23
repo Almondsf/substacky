@@ -2,12 +2,15 @@ import hashlib
 import hmac
 import json
 from decimal import Decimal
+from unittest.mock import patch
+from django.core import mail
 from django.test import override_settings
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APITestCase
 from apps.accounts.models import CustomUser as User
 from apps.subscriptions.models import Payment, Plan, Subscription
+from apps.subscriptions.paystack import PaystackError
 from apps.tenants.models import Tenant
 from apps.webhooks.models import WebhookEvent
 
@@ -168,3 +171,46 @@ class PaymentRecordingTests(WebhookTestCase):
     def test_unmatched_charge_records_nothing(self):
         self.post_event({'event': 'charge.success', 'data': {'reference': 'stray', 'amount': 100}})
         self.assertFalse(Payment.objects.exists())
+
+
+@patch('apps.subscriptions.notifications.PaystackClient')
+class PaymentFailedTests(WebhookTestCase):
+
+    def fail_payment(self, nested=True):
+        data = {'invoice_code': 'INV_1', 'subscription': {'subscription_code': 'SUB_abc'}} if nested \
+            else {'reference': 'r', 'subscription_code': 'SUB_abc'}
+        with self.captureOnCommitCallbacks(execute=True):
+            self.post_event({'event': 'invoice.payment_failed', 'data': data})
+
+    def test_invoice_payload_marks_past_due_and_emails(self, client_cls):
+        client_cls.return_value.get_manage_link.return_value = 'https://paystack.com/manage/xyz'
+        self.fail_payment()
+        self.assert_status(Subscription.Status.PAST_DUE)
+        self.assertIsNotNone(self.subscription.past_due_since)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['m@acme.com'])
+        self.assertIn('https://paystack.com/manage/xyz', mail.outbox[0].body)
+
+    def test_email_sent_without_manage_link_when_paystack_fails(self, client_cls):
+        client_cls.return_value.get_manage_link.side_effect = PaystackError()
+        self.fail_payment(nested=False)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertNotIn('Update your card', mail.outbox[0].body)
+
+    def test_repeat_failure_does_not_reset_clock_or_email_again(self, client_cls):
+        self.fail_payment()
+        self.subscription.refresh_from_db()
+        first_since = self.subscription.past_due_since
+        with self.captureOnCommitCallbacks(execute=True):
+            self.post_event({'event': 'subscription.updated', 'data': {
+                'subscription_code': 'SUB_abc', 'status': 'attention'
+            }})
+        self.subscription.refresh_from_db()
+        self.assertEqual(self.subscription.past_due_since, first_since)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_recovery_clears_past_due(self, client_cls):
+        self.fail_payment()
+        self.post_event({'event': 'charge.success', 'data': {'reference': 'retry', 'subscription_code': 'SUB_abc'}})
+        self.assert_status(Subscription.Status.ACTIVE)
+        self.assertIsNone(self.subscription.past_due_since)

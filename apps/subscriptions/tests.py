@@ -1,6 +1,10 @@
 import json
 from datetime import timedelta
 from decimal import Decimal
+from io import StringIO
+from django.core import mail
+from django.core.management import call_command
+from django.test import override_settings
 from django.utils import timezone
 from unittest.mock import MagicMock, patch
 from django.urls import reverse
@@ -328,3 +332,44 @@ class TenantAdminTests(SubscriptionTestCase):
         self.assertEqual(self.client.get(reverse('payment-list')).data, [])
         self.client.force_authenticate(self.member)
         self.assertEqual(len(self.client.get(reverse('payment-list')).data), 2)
+
+
+@override_settings(DUNNING_GRACE_DAYS=7)
+@patch('apps.subscriptions.management.commands.process_dunning.PaystackClient')
+class DunningTests(SubscriptionTestCase):
+
+    def past_due(self, days, **kwargs):
+        return Subscription.objects.create(
+            user=self.member, plan=self.plan, status=Subscription.Status.PAST_DUE,
+            past_due_since=timezone.now() - timedelta(days=days), **kwargs
+        )
+
+    def run_dunning(self, *args):
+        call_command('process_dunning', *args, stdout=StringIO(), stderr=StringIO())
+
+    def test_cancels_after_grace_period_and_emails(self, client_cls):
+        overdue = self.past_due(8, paystack_subscription_code='SUB_1', paystack_email_token='tok')
+        recent = self.past_due(2)
+        self.run_dunning()
+        overdue.refresh_from_db()
+        recent.refresh_from_db()
+        self.assertEqual(overdue.status, Subscription.Status.CANCELED)
+        self.assertEqual(recent.status, Subscription.Status.PAST_DUE)
+        client_cls.return_value.disable_subscription.assert_called_once_with('SUB_1', 'tok')
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('canceled', mail.outbox[0].subject)
+
+    def test_paystack_failure_retries_next_run(self, client_cls):
+        client_cls.return_value.disable_subscription.side_effect = PaystackError()
+        overdue = self.past_due(8, paystack_subscription_code='SUB_1', paystack_email_token='tok')
+        self.run_dunning()
+        overdue.refresh_from_db()
+        self.assertEqual(overdue.status, Subscription.Status.PAST_DUE)
+        self.assertEqual(mail.outbox, [])
+
+    def test_dry_run_changes_nothing(self, client_cls):
+        overdue = self.past_due(8)
+        self.run_dunning('--dry-run')
+        overdue.refresh_from_db()
+        self.assertEqual(overdue.status, Subscription.Status.PAST_DUE)
+        client_cls.return_value.disable_subscription.assert_not_called()

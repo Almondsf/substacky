@@ -68,6 +68,17 @@ PAYSTACK_BASE_URL = config('PAYSTACK_BASE_URL', default='https://api.paystack.co
 # Where Paystack sends the customer after checkout (your frontend).
 PAYSTACK_CALLBACK_URL = config('PAYSTACK_CALLBACK_URL', default='')
 
+# Days a subscription may stay past due before it is canceled (process_dunning).
+DUNNING_GRACE_DAYS = config('DUNNING_GRACE_DAYS', default=7, cast=int)
+
+EMAIL_BACKEND = config('EMAIL_BACKEND', default='django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = config('EMAIL_HOST', default='localhost')
+EMAIL_PORT = config('EMAIL_PORT', default=587, cast=int)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=True, cast=bool)
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='SubStacky <no-reply@substacky.local>')
+
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},

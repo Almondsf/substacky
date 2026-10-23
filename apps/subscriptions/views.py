@@ -130,8 +130,7 @@ class SubscriptionCancelView(APIView):
                 subscription.paystack_subscription_code, subscription.paystack_email_token
             )
 
-        subscription.status = Subscription.Status.CANCELED
-        subscription.save(update_fields=['status'])
+        subscription.set_status(Subscription.Status.CANCELED)
         return Response(SubscriptionSerializer(subscription).data)
 
 
