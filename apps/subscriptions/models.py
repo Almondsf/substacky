@@ -1,4 +1,5 @@
 from django.db import models
+from django.utils import timezone
 import uuid
 
 # Create your models here.
@@ -32,7 +33,17 @@ class Subscription(models.Model):
     # Paystack requires this token (from subscription.create) to disable a subscription.
     paystack_email_token = models.CharField(max_length=255, blank=True, null=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    past_due_since = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    def set_status(self, status):
+        """Change status, tracking when the subscription fell past due. Returns True if it changed."""
+        if status == self.status:
+            return False
+        self.status = status
+        self.past_due_since = timezone.now() if status == self.Status.PAST_DUE else None
+        self.save(update_fields=['status', 'past_due_since'])
+        return True
 
 
 class Payment(models.Model):
