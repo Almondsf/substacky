@@ -13,6 +13,15 @@ class RegistrationSerializer(ModelSerializer):
         read_only_fields = ['id', 'role']
         extra_kwargs = {'password': {'write_only': True}}
 
+    def validate(self, attrs):
+        # On a tenant domain / X-Tenant request, users join that tenant.
+        request_tenant = getattr(self.context.get('request'), 'tenant', None)
+        if request_tenant:
+            if attrs.get('tenant') and attrs['tenant'] != request_tenant:
+                raise serializers.ValidationError({'tenant': 'Does not match the tenant of this request.'})
+            attrs['tenant'] = request_tenant
+        return attrs
+
     def create(self, validated_data):
         # Self-registered users are always members; admins are created with their tenant.
         user = User.objects.create_user(

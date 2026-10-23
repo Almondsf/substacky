@@ -16,20 +16,18 @@ from apps.subscriptions.serializers import (
     TenantSubscriptionSerializer, PaymentSerializer,
 )
 from rest_framework.permissions import IsAuthenticated
+from core.mixins import TenantScopedMixin
 from core.permissions import IsTenantAdmin
 
-class PlanListCreateView(generics.ListCreateAPIView):
+class PlanListCreateView(TenantScopedMixin, generics.ListCreateAPIView):
     serializer_class = PlanSerializer
-    
+    queryset = Plan.objects.all()
+
     def get_permissions(self):
         if self.request.method == 'POST':
             return [IsTenantAdmin()]
         return [IsAuthenticated()]
-    
-    def get_queryset(self):
-        tenant = self.request.user.tenant
-        return Plan.objects.filter(tenant=tenant)
-    
+
     def perform_create(self, serializer):
         data = serializer.validated_data
         plan_code = PaystackClient().create_plan(
@@ -40,18 +38,16 @@ class PlanListCreateView(generics.ListCreateAPIView):
         serializer.save(tenant=self.request.user.tenant, paystack_plan_code=plan_code)
 
 
-class PlanDetailView(generics.RetrieveUpdateDestroyAPIView):
+class PlanDetailView(TenantScopedMixin, generics.RetrieveUpdateDestroyAPIView):
     serializer_class = PlanSerializer
+    queryset = Plan.objects.all()
     lookup_field = 'pk'
-    
+
     def get_permissions(self):
         if self.request.method in ['PUT', 'PATCH', 'DELETE']:
             return [IsTenantAdmin()]
         return [IsAuthenticated()]
-    
-    def get_queryset(self):
-        return Plan.objects.filter(tenant=self.request.user.tenant)
-    
+
 class SubscriptionListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated]
     serializer_class = SubscriptionSerializer
@@ -142,27 +138,25 @@ class PaymentListView(generics.ListAPIView):
         return Payment.objects.filter(user=self.request.user)
 
 
-class TenantSubscriptionListView(generics.ListAPIView):
+class TenantSubscriptionListView(TenantScopedMixin, generics.ListAPIView):
     """All subscriptions in the admin's tenant; filter with ?status=active."""
     permission_classes = [IsTenantAdmin]
     serializer_class = TenantSubscriptionSerializer
+    queryset = Subscription.objects.select_related('user').order_by('-created_at')
+    tenant_field = 'plan__tenant'
 
     def get_queryset(self):
-        queryset = Subscription.objects.filter(
-            plan__tenant=self.request.user.tenant
-        ).select_related('user').order_by('-created_at')
+        queryset = super().get_queryset()
         status_filter = self.request.query_params.get('status')
         if status_filter:
             queryset = queryset.filter(status=status_filter)
         return queryset
 
 
-class TenantPaymentListView(generics.ListAPIView):
+class TenantPaymentListView(TenantScopedMixin, generics.ListAPIView):
     permission_classes = [IsTenantAdmin]
     serializer_class = PaymentSerializer
-
-    def get_queryset(self):
-        return Payment.objects.filter(tenant=self.request.user.tenant)
+    queryset = Payment.objects.all()
 
 
 def monthly_price(plan):

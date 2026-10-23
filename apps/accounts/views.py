@@ -9,6 +9,7 @@ from apps.accounts.serializers import (
     RegistrationSerializer, EmailTokenObtainPairSerializer, UserSerializer,
     InviteSerializer, InviteAcceptSerializer, MemberSerializer,
 )
+from core.mixins import TenantScopedMixin
 from core.permissions import IsTenantAdmin
 from rest_framework_simplejwt.views import TokenObtainPairView
 
@@ -31,13 +32,11 @@ class MeView(generics.RetrieveUpdateAPIView):
         return self.request.user
 
 
-class InviteListCreateView(generics.ListCreateAPIView):
+class InviteListCreateView(TenantScopedMixin, generics.ListCreateAPIView):
     """Tenant admins list and send invites. Re-inviting an email replaces its open invite."""
     serializer_class = InviteSerializer
     permission_classes = [IsTenantAdmin]
-
-    def get_queryset(self):
-        return Invite.objects.filter(tenant=self.request.user.tenant, accepted_at__isnull=True)
+    queryset = Invite.objects.filter(accepted_at__isnull=True)
 
     def perform_create(self, serializer):
         tenant = self.request.user.tenant
@@ -49,11 +48,9 @@ class InviteListCreateView(generics.ListCreateAPIView):
         send_invite_email(invite)
 
 
-class InviteRevokeView(generics.DestroyAPIView):
+class InviteRevokeView(TenantScopedMixin, generics.DestroyAPIView):
     permission_classes = [IsTenantAdmin]
-
-    def get_queryset(self):
-        return Invite.objects.filter(tenant=self.request.user.tenant, accepted_at__isnull=True)
+    queryset = Invite.objects.filter(accepted_at__isnull=True)
 
 
 class InviteAcceptView(APIView):
@@ -80,22 +77,18 @@ class InviteAcceptView(APIView):
         return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
 
-class MemberListView(generics.ListAPIView):
+class MemberListView(TenantScopedMixin, generics.ListAPIView):
     serializer_class = MemberSerializer
     permission_classes = [IsTenantAdmin]
-
-    def get_queryset(self):
-        return User.objects.filter(tenant=self.request.user.tenant).order_by('created_at')
+    queryset = User.objects.order_by('created_at')
 
 
-class MemberDetailView(generics.RetrieveUpdateDestroyAPIView):
+class MemberDetailView(TenantScopedMixin, generics.RetrieveUpdateDestroyAPIView):
     """Change a member's role, or remove them from the tenant."""
     serializer_class = MemberSerializer
     permission_classes = [IsTenantAdmin]
     http_method_names = ['get', 'patch', 'delete']
-
-    def get_queryset(self):
-        return User.objects.filter(tenant=self.request.user.tenant)
+    queryset = User.objects.all()
 
     def perform_update(self, serializer):
         if serializer.instance == self.request.user:

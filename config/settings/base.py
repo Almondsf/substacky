@@ -26,6 +26,7 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'core.middleware.TenantMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
@@ -92,7 +93,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'core.authentication.TenantJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -101,6 +102,10 @@ REST_FRAMEWORK = {
 }
 
 AUTH_USER_MODEL = 'accounts.CustomUser'
+
+# Tenants are resolved from the X-Tenant header (slug), or from the subdomain
+# of this domain when set, e.g. TENANT_BASE_DOMAIN=substacky.com -> acme.substacky.com.
+TENANT_BASE_DOMAIN = config('TENANT_BASE_DOMAIN', default='')
 
 SPECTACULAR_SETTINGS = {
     'TITLE': 'SubStacky API',
