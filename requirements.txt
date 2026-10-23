@@ -4,9 +4,11 @@ Django==6.0.5
 djangorestframework==3.17.1
 djangorestframework_simplejwt==5.5.1
 drf-spectacular==0.29.0
+gunicorn==23.0.0
 inflection==0.5.1
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
+packaging==26.3
 psycopg2-binary==2.9.12
 PyJWT==2.12.1
 python-decouple==3.8
@@ -17,3 +19,4 @@ sqlparse==0.5.5
 typing_extensions==4.15.0
 tzdata==2026.2
 uritemplate==4.2.0
+whitenoise==6.9.0
