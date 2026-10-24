@@ -1,4 +1,6 @@
 import json
+import urllib.error
+from io import BytesIO
 from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
@@ -169,7 +171,18 @@ class PaystackClientTests(APITestCase):
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, 'https://api.test/plan')
         self.assertEqual(request.get_header('Authorization'), 'Bearer sk')
+        # Paystack blocks the default Python-urllib User-Agent.
+        self.assertEqual(request.get_header('User-agent'), 'SubStacky/1.0')
         self.assertEqual(json.loads(request.data), {'name': 'Gold', 'amount': 250050, 'interval': 'annually'})
+
+    @patch('apps.subscriptions.paystack.urllib.request.urlopen')
+    def test_http_error_raises_and_logs_body(self, urlopen):
+        urlopen.side_effect = urllib.error.HTTPError(
+            'https://api.test/plan', 403, 'Forbidden', {}, BytesIO(b'error code: 1010')
+        )
+        with self.assertLogs('apps.subscriptions.paystack', 'ERROR') as logs, self.assertRaises(PaystackError):
+            PaystackClient(secret_key='sk', base_url='https://api.test').create_plan('Gold', 1, 'monthly')
+        self.assertIn('error code: 1010', logs.output[0])
 
     @patch('apps.subscriptions.paystack.urllib.request.urlopen')
     def test_rejected_request_raises(self, urlopen):

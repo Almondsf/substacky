@@ -9,6 +9,8 @@ from rest_framework.exceptions import APIException
 
 logger = logging.getLogger(__name__)
 
+USER_AGENT = 'SubStacky/1.0'
+
 PAYSTACK_INTERVALS = {
     'monthly': 'monthly',
     'yearly': 'annually',
@@ -39,12 +41,18 @@ class PaystackClient:
             headers={
                 'Authorization': f"Bearer {self.secret_key}",
                 'Content-Type': 'application/json',
+                # Paystack's firewall rejects the default Python-urllib agent (Cloudflare 1010).
+                'User-Agent': USER_AGENT,
             },
             method=method,
         )
         try:
             with urllib.request.urlopen(request, timeout=15) as response:
                 body = json.loads(response.read())
+        except urllib.error.HTTPError as e:
+            detail = e.read()[:500].decode('utf-8', errors='replace')
+            logger.error(f"Paystack request to {path} failed: HTTP {e.code}: {detail}")
+            raise PaystackError()
         except (urllib.error.URLError, json.JSONDecodeError) as e:
             logger.error(f"Paystack request to {path} failed: {e}")
             raise PaystackError()
