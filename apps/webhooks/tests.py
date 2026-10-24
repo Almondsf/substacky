@@ -168,6 +168,18 @@ class PaymentRecordingTests(WebhookTestCase):
         self.assertEqual(Payment.objects.get().subscription, self.subscription)
         self.assert_status(Subscription.Status.ACTIVE)
 
+    def test_real_charge_success_shape_with_plan_as_string(self):
+        # Shape observed from Paystack test mode: `plan` is the code string,
+        # `plan_object` holds the plan, and there is no subscription_code.
+        self.post_event({'event': 'charge.success', 'data': {
+            'reference': 'renewal_2', 'amount': 500000, 'status': 'success',
+            'customer': {'id': 1, 'email': 'm@acme.com'},
+            'plan': 'PLN_pro',
+            'plan_object': {'id': 9, 'plan_code': 'PLN_pro', 'name': 'Pro'},
+        }})
+        self.assertEqual(Payment.objects.get().subscription, self.subscription)
+        self.assert_status(Subscription.Status.ACTIVE)
+
     def test_unmatched_charge_records_nothing(self):
         self.post_event({'event': 'charge.success', 'data': {'reference': 'stray', 'amount': 100}})
         self.assertFalse(Payment.objects.exists())
