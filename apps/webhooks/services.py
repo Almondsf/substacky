@@ -140,4 +140,8 @@ class PaystackWebhookService:
             logger.warning(f"Unknown Paystack subscription status: {paystack_status}")
         if subscription_code and status:
             for subscription in Subscription.objects.filter(paystack_subscription_code=subscription_code):
+                # Cancelling disables the Paystack subscription, which Paystack reports
+                # as non-renewing; that must not reactivate a canceled subscription.
+                if paystack_status == 'non-renewing' and subscription.status == Subscription.Status.CANCELED:
+                    continue
                 self.transition(subscription, status)

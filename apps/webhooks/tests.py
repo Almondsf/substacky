@@ -102,6 +102,15 @@ class PaystackWebhookTests(WebhookTestCase):
             }})
             self.assert_status(expected)
 
+    def test_non_renewing_does_not_reactivate_canceled(self):
+        # After our cancel disables it, Paystack reports the subscription as
+        # non-renewing and sends subscription.not_renew.
+        self.subscription.set_status(Subscription.Status.CANCELED)
+        self.post_event({'event': 'subscription.not_renew', 'data': {
+            'subscription_code': 'SUB_abc', 'status': 'non-renewing'
+        }})
+        self.assert_status(Subscription.Status.CANCELED)
+
     def test_unknown_paystack_status_leaves_subscription_alone(self):
         self.post_event({'event': 'subscription.updated', 'data': {
             'subscription_code': 'SUB_abc', 'status': 'weird'
