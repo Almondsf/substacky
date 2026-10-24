@@ -19,6 +19,20 @@ PAYSTACK_STATUS_MAP = {
     'cancelled': Subscription.Status.CANCELED,
 }
 
+def plan_code_from(payload):
+    """
+    Paystack sends the plan as an object in subscription events, but in
+    charge.success `plan` is just the plan code and the object is `plan_object`.
+    """
+    for key in ('plan', 'plan_object'):
+        plan = payload.get(key)
+        if isinstance(plan, dict) and plan.get('plan_code'):
+            return plan['plan_code']
+        if isinstance(plan, str) and plan:
+            return plan
+    return None
+
+
 class PaystackWebhookService:
     
     def handle_event(self, event_type, payload):
@@ -42,7 +56,7 @@ class PaystackWebhookService:
         reference = payload.get('reference')
         subscription_code = payload.get('subscription_code')
         email = (payload.get('customer') or {}).get('email')
-        plan_code = (payload.get('plan') or {}).get('plan_code')
+        plan_code = plan_code_from(payload)
 
         if reference:
             subscription = Subscription.objects.filter(paystack_reference=reference).first()
@@ -82,7 +96,7 @@ class PaystackWebhookService:
         # link its code to the newest checkout for that customer and plan.
         subscription_code = payload.get('subscription_code')
         email = (payload.get('customer') or {}).get('email')
-        plan_code = (payload.get('plan') or {}).get('plan_code')
+        plan_code = plan_code_from(payload)
         if not (subscription_code and email and plan_code):
             return
         if Subscription.objects.filter(paystack_subscription_code=subscription_code).exists():
@@ -126,4 +140,8 @@ class PaystackWebhookService:
             logger.warning(f"Unknown Paystack subscription status: {paystack_status}")
         if subscription_code and status:
             for subscription in Subscription.objects.filter(paystack_subscription_code=subscription_code):
+                # Cancelling disables the Paystack subscription, which Paystack reports
+                # as non-renewing; that must not reactivate a canceled subscription.
+                if paystack_status == 'non-renewing' and subscription.status == Subscription.Status.CANCELED:
+                    continue
                 self.transition(subscription, status)

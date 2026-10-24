@@ -102,6 +102,15 @@ class PaystackWebhookTests(WebhookTestCase):
             }})
             self.assert_status(expected)
 
+    def test_non_renewing_does_not_reactivate_canceled(self):
+        # After our cancel disables it, Paystack reports the subscription as
+        # non-renewing and sends subscription.not_renew.
+        self.subscription.set_status(Subscription.Status.CANCELED)
+        self.post_event({'event': 'subscription.not_renew', 'data': {
+            'subscription_code': 'SUB_abc', 'status': 'non-renewing'
+        }})
+        self.assert_status(Subscription.Status.CANCELED)
+
     def test_unknown_paystack_status_leaves_subscription_alone(self):
         self.post_event({'event': 'subscription.updated', 'data': {
             'subscription_code': 'SUB_abc', 'status': 'weird'
@@ -164,6 +173,18 @@ class PaymentRecordingTests(WebhookTestCase):
         self.post_event({'event': 'charge.success', 'data': {
             'reference': 'renewal_1', 'amount': 500000,
             'customer': {'email': 'm@acme.com'}, 'plan': {'plan_code': 'PLN_pro'},
+        }})
+        self.assertEqual(Payment.objects.get().subscription, self.subscription)
+        self.assert_status(Subscription.Status.ACTIVE)
+
+    def test_real_charge_success_shape_with_plan_as_string(self):
+        # Shape observed from Paystack test mode: `plan` is the code string,
+        # `plan_object` holds the plan, and there is no subscription_code.
+        self.post_event({'event': 'charge.success', 'data': {
+            'reference': 'renewal_2', 'amount': 500000, 'status': 'success',
+            'customer': {'id': 1, 'email': 'm@acme.com'},
+            'plan': 'PLN_pro',
+            'plan_object': {'id': 9, 'plan_code': 'PLN_pro', 'name': 'Pro'},
         }})
         self.assertEqual(Payment.objects.get().subscription, self.subscription)
         self.assert_status(Subscription.Status.ACTIVE)
